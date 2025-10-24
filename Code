@@ -1,0 +1,89 @@
+import pulp
+import pandas as pd
+
+# Daten einlesen
+produkte = pd.DataFrame({
+    'produkt': ['Tiefkühl-Pizza', 'Frisch-Milch', 'Reis'],
+    'nachfrage': [200, 150, 80],
+    'lagerkosten': [0.50, 0.30, 0.10],
+    'verderbskosten': [8.00, 12.00, 2.00],
+    'mindestbestand': [50, 100, 40]
+})
+
+# LP-Problem definieren
+problem = pulp.LpProblem("Lebensmittellager_Optimierung", pulp.LpMinimize)
+
+# Entscheidungsvariablen
+bestellmengen = pulp.LpVariable.dicts("Bestellmenge",
+                                     produkte.index,
+                                     lowBound=0,
+                                     cat='Continuous')
+
+# HILFSVARIABLE für Überschuss über 110% der Nachfrage
+excess = pulp.LpVariable.dicts("Excess",
+                              produkte.index,
+                              lowBound=0,  # Stellt sicher: excess >= 0
+                              cat='Continuous')
+
+# Zielfunktion (ohne lpMax!)
+problem += pulp.lpSum([
+    produkte.loc[i, 'lagerkosten'] * bestellmengen[i] +
+    produkte.loc[i, 'verderbskosten'] * excess[i]  # Verwendung der Hilfsvariable
+    for i in produkte.index
+])
+
+# Nebenbedingungen
+# 1. Mindestbestand
+for i in produkte.index:
+    problem += (bestellmengen[i] >= produkte.loc[i, 'mindestbestand'],
+               f"Mindestbestand_{i}")
+
+# 2. Überschuss-Bedingung: excess[i] >= bestellmengen[i] - 1.1 * Nachfrage
+for i in produkte.index:
+    problem += (excess[i] >= bestellmengen[i] - produkte.loc[i, 'nachfrage'] * 1.1,
+               f"Ueberschuss_{i}")
+
+# 3. Lagerkapazität
+problem += (pulp.lpSum(bestellmengen) <= 2000, "Gesamtkapazitaet")
+
+# Lösung berechnen
+problem.solve()
+print("Status:", pulp.LpStatus[problem.status])
+
+# Ergebnisse
+for i in produkte.index:
+    print(f"{produkte.loc[i, 'produkt']}: {bestellmengen[i].varValue:.1f} Einheiten (Excess: {excess[i].varValue:.1f})")
+
+    import matplotlib.pyplot as plt
+
+    # Ergebnisse für Visualisierung vorbereiten
+    results = pd.DataFrame({
+        'produkt': produkte['produkt'],
+        'bestellmenge': [bestellmengen[i].varValue for i in produkte.index],
+        'excess': [excess[i].varValue for i in produkte.index],
+        'mindestbestand': produkte['mindestbestand'],
+        'nachfrage_110': produkte['nachfrage'] * 1.1
+    })
+
+    # Plot: Bestellmengen vs. Schwellenwerte
+    plt.figure(figsize=(12, 7))
+    x = range(len(produkte))
+
+    plt.bar(x, results['bestellmenge'], color='#4e79a7', alpha=0.8, label='Optimale Bestellmenge')
+    plt.scatter(x, results['mindestbestand'], s=150, c='#e15759', marker='D', label='Mindestbestand', zorder=5)
+    plt.scatter(x, results['nachfrage_110'], s=150, c='#59a14f', marker='X', label='110% Nachfrage', zorder=5)
+
+    plt.xticks(x, results['produkt'], fontsize=12)
+    plt.ylabel('Menge (Einheiten)', fontsize=12)
+    plt.title('Optimale Bestellmengen im Kontext kritischer Schwellenwerte', fontsize=14, fontweight='bold')
+    plt.legend(fontsize=10)
+    plt.grid(axis='y', linestyle='--', alpha=0.4)
+
+    # Anmerkungen für besseres Verständnis
+    for i in x:
+        plt.text(i, results['bestellmenge'][i] + 5, f"{results['bestellmenge'][i]:.0f}",
+                 ha='center', fontsize=10, fontweight='bold')
+
+    plt.tight_layout()
+    plt.savefig('bestellmengen_vergleich.png', dpi=300, bbox_inches='tight')
+    plt.show()
